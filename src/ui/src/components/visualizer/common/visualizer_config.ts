@@ -268,4 +268,15 @@ export declare interface VisualizerConfig {
    * the background.
    */
   enableBackgroundTexture?: boolean;
+
+  /**
+   * If set, highlight all downstream outputs of the selected node.
+   */
+  highlightAllDownstreamOutputs?: boolean;
+
+  /** The width of the highlighted edges. Default 1.5 */
+  highlightedEdgeWidth?: number;
+
+  /** The scale of the highlighted edges' arrowheads. Default 1. */
+  highlightedEdgeArrowScale?: number;
 }

@@ -68,6 +68,8 @@ export class WebglRendererIoHighlightService {
   outputsByHighlightedNode: Record<string, OpNode[]> = {};
 
   private webglRenderer!: WebglRenderer;
+  private incomingHighlightedEdges!: WebglEdges;
+  private outgoingHighlightedEdges!: WebglEdges;
   private webglRendererThreejsService!: WebglRendererThreejsService;
   private readonly threejsService: ThreejsService = inject(ThreejsService);
   private readonly visualizerThemeService: VisualizerThemeService = inject(
@@ -78,12 +80,6 @@ export class WebglRendererIoHighlightService {
     this.visualizerThemeService,
   );
   private readonly ioPickerTexts = new WebglTexts(this.threejsService);
-  private readonly incomingHighlightedEdges = new WebglEdges(
-    EDGE_WIDTH_IO_HIGHLIGHT,
-  );
-  private readonly outgoingHighlightedEdges = new WebglEdges(
-    EDGE_WIDTH_IO_HIGHLIGHT,
-  );
   private readonly incomingHighlightedEdgeTexts = new WebglTexts(
     this.threejsService,
   );
@@ -92,6 +88,14 @@ export class WebglRendererIoHighlightService {
   );
 
   init(webglRenderer: WebglRenderer) {
+    const edgeWidth =
+      webglRenderer.appService.config()?.highlightedEdgeWidth ??
+      EDGE_WIDTH_IO_HIGHLIGHT;
+    const arrowScale =
+      webglRenderer.appService.config()?.highlightedEdgeArrowScale ?? 1;
+
+    this.incomingHighlightedEdges = new WebglEdges(edgeWidth, arrowScale);
+    this.outgoingHighlightedEdges = new WebglEdges(edgeWidth, arrowScale);
     this.webglRenderer = webglRenderer;
     this.webglRendererThreejsService =
       webglRenderer.webglRendererThreejsService;
@@ -224,13 +228,29 @@ export class WebglRendererIoHighlightService {
     ////////////////////////////////////////////////////////////////////////////
     // Outgoing edges and nodes.
     //
-    const outgoing = this.getHighlightedOutgoingNodesAndEdges(
-      this.webglRenderer.curHiddenOutputIds,
-      undefined,
-      {
-        reuseRenderedEdgeCurvePoints: showOpNodeOutOfLayerEdgesWithoutSelecting,
-      },
-    );
+    const highlightAllDownstreamOutputs =
+      this.webglRenderer.appService.config()?.highlightAllDownstreamOutputs;
+    let outgoing;
+    if (highlightAllDownstreamOutputs) {
+      outgoing = this.getAllHighlightedOutgoingNodesAndEdges(
+        this.webglRenderer.curHiddenOutputIds,
+        undefined,
+        {
+          reuseRenderedEdgeCurvePoints:
+            showOpNodeOutOfLayerEdgesWithoutSelecting,
+        },
+      );
+    } else {
+      outgoing = this.getHighlightedOutgoingNodesAndEdges(
+        this.webglRenderer.curHiddenOutputIds,
+        undefined,
+        {
+          reuseRenderedEdgeCurvePoints:
+            showOpNodeOutOfLayerEdgesWithoutSelecting,
+        },
+      );
+    }
+
     if (outgoing.overlayEdges.length > 0) {
       const edges = outgoing.overlayEdges.map((edge) => {
         const fromNodeId = edge.fromNodeId;
@@ -774,6 +794,14 @@ export class WebglRendererIoHighlightService {
           targetNode,
           commonNamespace,
         );
+        const sourceHighlightedNode = this.getLastCollapsedAncestorNode(
+          opNode,
+          commonNamespace,
+        );
+        if (sourceHighlightedNode.id === highlightedNode.id) {
+          continue;
+        }
+
         highlightedNodes.push(highlightedNode);
 
         // Update outputsByHighlighedNode.
@@ -791,152 +819,30 @@ export class WebglRendererIoHighlightService {
           targetNode.id,
         );
 
-        // Start to construct an edge from the selected node to target node.
-        //
-        const points: Point[] = [];
-        const curvePoints: Point[] = [];
-
         if (renderedEdge) {
           renderedEdges.push(renderedEdge);
-          const renderedEdgeCurvePoints = renderedEdge.curvePoints || [];
-
-          const renderedEdgeFromNode =
-            this.webglRenderer.curModelGraph.nodesById[renderedEdge.fromNodeId];
-
-          // Add a point from the selected node that connects to the first point
-          // of the rendered edge.
-          if (
-            isOpNode(selectedNode) ||
-            (isGroupNode(selectedNode) &&
-              this.webglRenderer.isNodeRendered(opNode.id))
-          ) {
-            if (renderedEdge.fromNodeId !== opNode?.id) {
-              const renderedEdgeStartX =
-                renderedEdge.points[0].x + (renderedEdgeFromNode.globalX || 0);
-              const renderedEdgeStartY =
-                renderedEdge.points[0].y + (renderedEdgeFromNode.globalY || 0);
-              const endPt = this.getBestAnchorPointOnNode(
-                renderedEdgeStartX,
-                renderedEdgeStartY,
-                opNode,
-              );
-              points.push({
-                x: endPt.x - (opNode.globalX || 0),
-                y: endPt.y - (opNode.globalY || 0),
-              });
-              if (reuseRenderedEdgeCurvePoints) {
-                curvePoints.push(
-                  {
-                    x: endPt.x - (opNode.globalX || 0),
-                    y: endPt.y - (opNode.globalY || 0),
-                  },
-                  {
-                    x:
-                      renderedEdgeCurvePoints[0].x -
-                      (opNode.globalX || 0) +
-                      (renderedEdgeFromNode.globalX || 0),
-                    y:
-                      renderedEdgeCurvePoints[0].y -
-                      (opNode.globalY || 0) +
-                      (renderedEdgeFromNode.globalY || 0),
-                  },
-                );
-              }
-            }
-          }
-
-          // Add the points in rendered edge.
-          let targetPoints: Point[] = points;
-          let sourcePoints: Point[] = renderedEdge.points;
-          if (reuseRenderedEdgeCurvePoints) {
-            targetPoints = curvePoints;
-            sourcePoints = renderedEdgeCurvePoints;
-          }
-          targetPoints.push(
-            ...sourcePoints.map((pt) => {
-              return {
-                x:
-                  pt.x -
-                  (opNode.globalX || 0) +
-                  (renderedEdgeFromNode.globalX || 0),
-                y:
-                  pt.y -
-                  (opNode.globalY || 0) +
-                  (renderedEdgeFromNode.globalY || 0),
-              };
-            }),
+          const overlayEdge = this.createOverlayEdgeFromRenderedEdge(
+            renderedEdge,
+            reuseRenderedEdgeCurvePoints,
+            sourceHighlightedNode,
+            highlightedNode,
+            'outgoing',
           );
-
-          // Add a point from the highlighted node that connects to the first
-          // point of the rendered edge above.
-          if (renderedEdge.toNodeId !== highlightedNode.id) {
-            const renderedEdgeLastX =
-              renderedEdge.points[renderedEdge.points.length - 1].x +
-              (renderedEdgeFromNode.globalX || 0);
-            const renderedEdgeLastY =
-              renderedEdge.points[renderedEdge.points.length - 1].y +
-              (renderedEdgeFromNode.globalY || 0);
-            const startPt = this.getBestAnchorPointOnNode(
-              renderedEdgeLastX,
-              renderedEdgeLastY,
-              highlightedNode,
-            );
-            if (!reuseRenderedEdgeCurvePoints) {
-              points.push({
-                x: startPt.x - (opNode.globalX || 0),
-                y: startPt.y - (opNode.globalY || 0),
-              });
-            } else {
-              curvePoints.push(
-                {
-                  x:
-                    renderedEdgeCurvePoints[renderedEdgeCurvePoints.length - 1]
-                      .x -
-                    (opNode.globalX || 0) +
-                    (renderedEdgeFromNode.globalX || 0),
-                  y:
-                    renderedEdgeCurvePoints[renderedEdgeCurvePoints.length - 1]
-                      .y -
-                    (opNode.globalY || 0) +
-                    (renderedEdgeFromNode.globalY || 0),
-                },
-                {
-                  x: startPt.x - (opNode.globalX || 0),
-                  y: startPt.y - (opNode.globalY || 0),
-                },
-              );
-            }
+          if (overlayEdge) {
+            overlayEdges.push(overlayEdge);
           }
         } else if (
           isGroupNode(highlightedNode) ||
           (isOpNode(highlightedNode) && !highlightedNode.hideInLayout)
         ) {
-          (reuseRenderedEdgeCurvePoints ? curvePoints : points).push(
-            ...this.getDirectEdgeBetweenNodes(opNode, highlightedNode),
+          const overlayEdge = this.createDirectOverlayEdge(
+            sourceHighlightedNode,
+            highlightedNode,
+            reuseRenderedEdgeCurvePoints,
+            'outgoing',
           );
-        }
-
-        // Use these points to form an edge and add it as an overlay edge.
-        if (!reuseRenderedEdgeCurvePoints) {
-          if (points.length > 0) {
-            overlayEdges.push({
-              id: `overlay_${opNode.id}___${highlightedNode.id}`,
-              fromNodeId: opNode.id,
-              toNodeId: highlightedNode.id,
-              points,
-              type: 'outgoing',
-            });
-          }
-        } else {
-          if (curvePoints.length > 0) {
-            overlayEdges.push({
-              id: `overlay_${opNode.id}___${highlightedNode.id}`,
-              fromNodeId: opNode.id,
-              toNodeId: highlightedNode.id,
-              points: [],
-              curvePoints,
-              type: 'outgoing',
-            });
+          if (overlayEdge) {
+            overlayEdges.push(overlayEdge);
           }
         }
       }
@@ -1201,5 +1107,402 @@ export class WebglRendererIoHighlightService {
     y2: number,
   ): number {
     return Math.pow(x1 - x2, 2) + Math.pow(y1 - y2, 2);
+  }
+
+  private findAllEdgesConnectingTwoNodesInNamespace(
+    namespace: string,
+    sourceNodeId: string,
+    targetNodeId: string,
+  ): ModelEdge[] {
+    const groupNodeId = namespace === '' ? '' : `${namespace}___group___`;
+    return (
+      this.webglRenderer.curModelGraph.edgesByGroupNodeIds[groupNodeId] ?? []
+    ).filter((edge) => {
+      const fromNode =
+        this.webglRenderer.curModelGraph.nodesById[edge.fromNodeId];
+      const toNode = this.webglRenderer.curModelGraph.nodesById[edge.toNodeId];
+      const fromNodeContainsSourceNode = this.containNode(
+        fromNode,
+        sourceNodeId,
+      );
+      const toNodeContainsTargetNode = this.containNode(toNode, targetNodeId);
+      return fromNodeContainsSourceNode && toNodeContainsTargetNode;
+    });
+  }
+
+  getAllHighlightedOutgoingNodesAndEdges(
+    hiddenOutputIds: Record<string, boolean>,
+    selectedNode?: ModelNode,
+    options?: {
+      ignoreEdgesWithinSameNamespace?: boolean;
+      reuseRenderedEdgeCurvePoints?: boolean;
+    },
+  ) {
+    const ignoreEdgesWithinSameNamespace =
+      options?.ignoreEdgesWithinSameNamespace ?? false;
+    const reuseRenderedEdgeCurvePoints =
+      options?.reuseRenderedEdgeCurvePoints ?? false;
+
+    if (!selectedNode) {
+      selectedNode =
+        this.webglRenderer.curModelGraph.nodesById[
+          this.webglRenderer.selectedNodeId
+        ];
+    }
+    const renderedEdges: ModelEdge[] = [];
+    const highlightedNodes: ModelNode[] = [];
+    const outputsByHighlightedNode: Record<string, OpNode[]> = {};
+    const overlayEdges: OverlayModelEdge[] = [];
+
+    const opNodes: OpNode[] = [];
+    const opNodesSet = new Set<string>();
+    const ignoredOutgoingNodesIds = new Set<string>();
+    const seenOutgoingEdges = new Set<string>();
+    const seenOverlayEdges = new Set<string>();
+
+    if (isOpNode(selectedNode)) {
+      opNodes.push(selectedNode);
+      opNodesSet.add(selectedNode.id);
+    } else if (isGroupNode(selectedNode)) {
+      for (const id of selectedNode.descendantsOpNodeIds || []) {
+        const node = this.webglRenderer.curModelGraph.nodesById[id] as OpNode;
+        if (node) {
+          opNodes.push(node);
+          opNodesSet.add(id);
+          ignoredOutgoingNodesIds.add(id);
+        }
+      }
+    }
+
+    for (let i = 0; i < opNodes.length; i++) {
+      const opNode = opNodes[i];
+      for (const outgoingEdges of opNode.outgoingEdges || []) {
+        if (
+          hiddenOutputIds[`${opNode.id}___${outgoingEdges.sourceNodeOutputId}`]
+        ) {
+          continue;
+        }
+
+        const targetNode = this.webglRenderer.curModelGraph.nodesById[
+          outgoingEdges.targetNodeId
+        ] as OpNode;
+        if (!targetNode) {
+          continue;
+        }
+
+        if (ignoredOutgoingNodesIds.has(targetNode.id)) {
+          continue;
+        }
+
+        const edgeKey = `${opNode.id}___${targetNode.id}`;
+        if (seenOutgoingEdges.has(edgeKey)) {
+          continue;
+        }
+        seenOutgoingEdges.add(edgeKey);
+
+        if (
+          ignoreEdgesWithinSameNamespace &&
+          targetNode.namespace === opNode.namespace
+        ) {
+          continue;
+        }
+
+        const absoluteSource = this.getLastCollapsedAncestorNode(opNode, '');
+        const absoluteTarget = this.getLastCollapsedAncestorNode(
+          targetNode,
+          '',
+        );
+
+        if (absoluteSource.id === absoluteTarget.id) {
+          if (!opNodesSet.has(targetNode.id)) {
+            opNodesSet.add(targetNode.id);
+            opNodes.push(targetNode);
+          }
+          continue;
+        }
+
+        // Find the common namespace prefix.
+        const commonNamespace = findCommonNamespace(
+          targetNode.namespace,
+          opNode.namespace,
+        );
+
+        // Go from the given node to all its ns ancestors, find the last
+        // collapsed node before reaching the given namespace, and style it with
+        // the given class. If all ancestor nodes are expanded, style the given
+        // node.
+        const highlightedNode = this.getLastCollapsedAncestorNode(
+          targetNode,
+          commonNamespace,
+        );
+        const sourceHighlightedNode = this.getLastCollapsedAncestorNode(
+          opNode,
+          commonNamespace,
+        );
+
+        if (sourceHighlightedNode.id === highlightedNode.id) {
+          if (!opNodesSet.has(targetNode.id)) {
+            opNodesSet.add(targetNode.id);
+            opNodes.push(targetNode);
+          }
+          continue;
+        }
+
+        const overlayEdgeId = `overlay_${sourceHighlightedNode.id}___${highlightedNode.id}`;
+        if (seenOverlayEdges.has(overlayEdgeId)) {
+          if (!opNodesSet.has(targetNode.id)) {
+            opNodesSet.add(targetNode.id);
+            opNodes.push(targetNode);
+          }
+          continue;
+        }
+        seenOverlayEdges.add(overlayEdgeId);
+
+        highlightedNodes.push(highlightedNode);
+
+        // Update outputsByHighlighedNode.
+        if (outputsByHighlightedNode[highlightedNode.id] == null) {
+          outputsByHighlightedNode[highlightedNode.id] = [];
+        }
+        outputsByHighlightedNode[highlightedNode.id].push(targetNode);
+
+        // Find the existing edges in the common namespace that connect two
+        // nodes n1 and n2 where n1 contains `sourceNode` and n2 contains
+        // `node`.
+        const renderedEdgesFound =
+          this.findAllEdgesConnectingTwoNodesInNamespace(
+            commonNamespace,
+            opNode.id,
+            targetNode.id,
+          );
+
+        if (renderedEdgesFound.length === 0) {
+          if (
+            isGroupNode(highlightedNode) ||
+            (isOpNode(highlightedNode) && !highlightedNode.hideInLayout)
+          ) {
+            const overlayEdge = this.createDirectOverlayEdge(
+              sourceHighlightedNode,
+              highlightedNode,
+              reuseRenderedEdgeCurvePoints,
+              'outgoing',
+              overlayEdgeId,
+            );
+            if (overlayEdge) {
+              overlayEdges.push(overlayEdge);
+            }
+          }
+        }
+
+        let iEdge = 0;
+        for (const renderedEdge of renderedEdgesFound) {
+          const curOverlayEdgeId =
+            renderedEdgesFound.length > 1
+              ? `${overlayEdgeId}_${iEdge}`
+              : overlayEdgeId;
+          iEdge++;
+          renderedEdges.push(renderedEdge);
+          const overlayEdge = this.createOverlayEdgeFromRenderedEdge(
+            renderedEdge,
+            reuseRenderedEdgeCurvePoints,
+            sourceHighlightedNode,
+            highlightedNode,
+            'outgoing',
+            curOverlayEdgeId,
+          );
+          if (overlayEdge) {
+            overlayEdges.push(overlayEdge);
+          }
+        }
+
+        if (!opNodesSet.has(targetNode.id)) {
+          opNodesSet.add(targetNode.id);
+          opNodes.push(targetNode);
+        }
+      }
+    }
+
+    return {
+      renderedEdges,
+      highlightedNodes,
+      outputsByHighlightedNode,
+      overlayEdges,
+    };
+  }
+
+  private createOverlayEdgeFromRenderedEdge(
+    renderedEdge: ModelEdge,
+    reuseRenderedEdgeCurvePoints: boolean,
+    startNode: ModelNode,
+    endNode: ModelNode,
+    type: 'incoming' | 'outgoing',
+    id?: string,
+  ): OverlayModelEdge | undefined {
+    const points: Point[] = [];
+    const curvePoints: Point[] = [];
+    const renderedEdgeCurvePoints = renderedEdge.curvePoints || [];
+    const renderedEdgeFromNode =
+      this.webglRenderer.curModelGraph.nodesById[renderedEdge.fromNodeId];
+
+    // Add a point from the selected node that connects to the first point
+    // of the rendered edge.
+    if (renderedEdge.fromNodeId !== startNode.id) {
+      const renderedEdgeStartX =
+        renderedEdge.points[0].x + (renderedEdgeFromNode.globalX || 0);
+      const renderedEdgeStartY =
+        renderedEdge.points[0].y + (renderedEdgeFromNode.globalY || 0);
+      const endPt = this.getBestAnchorPointOnNode(
+        renderedEdgeStartX,
+        renderedEdgeStartY,
+        startNode,
+      );
+      points.push({
+        x: endPt.x - (startNode.globalX || 0),
+        y: endPt.y - (startNode.globalY || 0),
+      });
+      if (reuseRenderedEdgeCurvePoints) {
+        curvePoints.push(
+          {
+            x: endPt.x - (startNode.globalX || 0),
+            y: endPt.y - (startNode.globalY || 0),
+          },
+          {
+            x:
+              renderedEdgeCurvePoints[0].x -
+              (startNode.globalX || 0) +
+              (renderedEdgeFromNode.globalX || 0),
+            y:
+              renderedEdgeCurvePoints[0].y -
+              (startNode.globalY || 0) +
+              (renderedEdgeFromNode.globalY || 0),
+          },
+        );
+      }
+    }
+
+    // Add the points in rendered edge.
+    let targetPoints: Point[] = points;
+    let sourcePoints: Point[] = renderedEdge.points;
+    if (reuseRenderedEdgeCurvePoints) {
+      targetPoints = curvePoints;
+      sourcePoints = renderedEdgeCurvePoints;
+    }
+    targetPoints.push(
+      ...sourcePoints.map((pt) => {
+        return {
+          x:
+            pt.x -
+            (startNode.globalX || 0) +
+            (renderedEdgeFromNode.globalX || 0),
+          y:
+            pt.y -
+            (startNode.globalY || 0) +
+            (renderedEdgeFromNode.globalY || 0),
+        };
+      }),
+    );
+
+    // Add a point from the highlighted node that connects to the first
+    // point of the rendered edge above.
+    if (renderedEdge.toNodeId !== endNode.id) {
+      const renderedEdgeLastX =
+        renderedEdge.points[renderedEdge.points.length - 1].x +
+        (renderedEdgeFromNode.globalX || 0);
+      const renderedEdgeLastY =
+        renderedEdge.points[renderedEdge.points.length - 1].y +
+        (renderedEdgeFromNode.globalY || 0);
+      const startPt = this.getBestAnchorPointOnNode(
+        renderedEdgeLastX,
+        renderedEdgeLastY,
+        endNode,
+      );
+      if (!reuseRenderedEdgeCurvePoints) {
+        points.push({
+          x: startPt.x - (startNode.globalX || 0),
+          y: startPt.y - (startNode.globalY || 0),
+        });
+      } else {
+        curvePoints.push(
+          {
+            x:
+              renderedEdgeCurvePoints[renderedEdgeCurvePoints.length - 1].x -
+              (startNode.globalX || 0) +
+              (renderedEdgeFromNode.globalX || 0),
+            y:
+              renderedEdgeCurvePoints[renderedEdgeCurvePoints.length - 1].y -
+              (startNode.globalY || 0) +
+              (renderedEdgeFromNode.globalY || 0),
+          },
+          {
+            x: startPt.x - (startNode.globalX || 0),
+            y: startPt.y - (startNode.globalY || 0),
+          },
+        );
+      }
+    }
+
+    // Use these points to form an edge and add it as an overlay edge.
+    if (!reuseRenderedEdgeCurvePoints) {
+      if (points.length > 0) {
+        return {
+          id: id ?? `overlay_${startNode.id}___${endNode.id}`,
+          fromNodeId: startNode.id,
+          toNodeId: endNode.id,
+          points,
+          type,
+        };
+      }
+    } else {
+      if (curvePoints.length > 0) {
+        return {
+          id: id ?? `overlay_${startNode.id}___${endNode.id}`,
+          fromNodeId: startNode.id,
+          toNodeId: endNode.id,
+          points: [],
+          curvePoints,
+          type,
+        };
+      }
+    }
+    return undefined;
+  }
+
+  private createDirectOverlayEdge(
+    startNode: ModelNode,
+    endNode: ModelNode,
+    reuseRenderedEdgeCurvePoints: boolean,
+    type: 'incoming' | 'outgoing',
+    id?: string,
+  ): OverlayModelEdge | undefined {
+    const points: Point[] = [];
+    const curvePoints: Point[] = [];
+    (reuseRenderedEdgeCurvePoints ? curvePoints : points).push(
+      ...this.getDirectEdgeBetweenNodes(startNode, endNode),
+    );
+
+    // Use these points to form an edge and add it as an overlay edge.
+    if (!reuseRenderedEdgeCurvePoints) {
+      if (points.length > 0) {
+        return {
+          id: id ?? `overlay_${startNode.id}___${endNode.id}`,
+          fromNodeId: startNode.id,
+          toNodeId: endNode.id,
+          points,
+          type,
+        };
+      }
+    } else {
+      if (curvePoints.length > 0) {
+        return {
+          id: id ?? `overlay_${startNode.id}___${endNode.id}`,
+          fromNodeId: startNode.id,
+          toNodeId: endNode.id,
+          points: [],
+          curvePoints,
+          type,
+        };
+      }
+    }
+    return undefined;
   }
 }
