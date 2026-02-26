@@ -262,4 +262,10 @@ export declare interface VisualizerConfig {
    * If set, expand the values in the info panel by default.
    */
   expandInfoPanelValuesByDefault?: boolean;
+
+  /**
+   * If set, enable the background texture which will draw a grid with dots on
+   * the background.
+   */
+  enableBackgroundTexture?: boolean;
 }

@@ -493,7 +493,7 @@ export class WebglRenderer implements OnInit, OnChanges, OnDestroy {
     this.webglRendererSearchResultsService.init(this);
     this.webglRendererSnapshotService.init(this);
     this.webglRendererSubgraphSelectionService.init(this);
-    this.webglRendererThreejsService.init(this);
+    this.webglRendererThreejsService.init(this, this.appService.config());
     this.syncNavigationRelatedNodesHighlights =
       new WebglRendererHighlightNodesService(
         this,
@@ -3346,11 +3346,7 @@ export class WebglRenderer implements OnInit, OnChanges, OnDestroy {
     link.download = 'model_explorer_graph.png';
     setAnchorHref(link, canvas.toDataURL());
     link.click();
-    this.webglRendererThreejsService.setSceneBackground(
-      new THREE.Color(
-        this.visualizerThemeService.getColor(ColorVariable.SURFACE_COLOR),
-      ),
-    );
+    this.webglRendererThreejsService.updateSceneBackground();
   }
 
   private async openSubgraph(subgraphId: string) {

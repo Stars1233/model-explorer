@@ -23,6 +23,7 @@ import * as three from 'three';
 import {ModelGraph} from './common/model_graph';
 import {Point, Rect} from './common/types';
 import {getHighQualityPixelRatio, IS_MAC} from './common/utils';
+import {VisualizerConfig} from './common/visualizer_config';
 import {ColorVariable} from './visualizer_theme_service';
 import {WebglRenderer} from './webgl_renderer';
 
@@ -55,9 +56,11 @@ export class WebglRendererThreejsService {
   private resizeTimeoutRef = -1;
   private fpsStartTime = -1;
   private frames = 0;
+  private config?: VisualizerConfig;
 
-  init(webglRenderer: WebglRenderer) {
+  init(webglRenderer: WebglRenderer, config?: VisualizerConfig) {
     this.webglRenderer = webglRenderer;
+    this.config = config;
   }
 
   setupZoomAndPan(
@@ -284,12 +287,59 @@ export class WebglRendererThreejsService {
     this.raycaster.params.Points!.threshold = 5.5;
   }
 
-  updateSceneBackground() {
-    this.scene.background = new THREE.Color(
-      this.webglRenderer.visualizerThemeService.getColor(
-        ColorVariable.SURFACE_COLOR,
-      ),
+  getTextureBackground(): three.CanvasTexture | null {
+    if (!this.webglRenderer.container) {
+      return null;
+    }
+
+    // Create a canvas for the texture.
+    const canvas = document.createElement('canvas');
+    canvas.width = 20;
+    canvas.height = 20;
+
+    const context = canvas.getContext('2d');
+    if (!context) {
+      return null;
+    }
+
+    // Draw the background color.
+    context.fillStyle = this.webglRenderer.visualizerThemeService.getColor(
+      ColorVariable.SURFACE_COLOR,
     );
+    context.fillRect(0, 0, 20, 20);
+
+    // Draw the dot.
+    const dotColor = this.webglRenderer.visualizerThemeService.getColor(
+      ColorVariable.OUTLINE_HAIRLINE_COLOR,
+    );
+    context.fillStyle = dotColor;
+    context.beginPath();
+    context.arc(10, 10, 1, 0, 2 * Math.PI);
+    context.fill();
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.magFilter = THREE.NearestFilter;
+    texture.minFilter = THREE.LinearMipMapLinearFilter;
+
+    // Set the repeat based on the container size.
+    const container = this.webglRenderer.container.nativeElement;
+    texture.repeat.set(container.clientWidth / 20, container.clientHeight / 20);
+
+    return texture;
+  }
+
+  updateSceneBackground() {
+    if (this.config?.enableBackgroundTexture) {
+      this.scene.background = this.getTextureBackground();
+    } else {
+      this.scene.background = new THREE.Color(
+        this.webglRenderer.visualizerThemeService.getColor(
+          ColorVariable.SURFACE_COLOR,
+        ),
+      );
+    }
   }
 
   clearScene(objsToSkip: Array<three.Object3D | undefined> = []) {
@@ -356,10 +406,6 @@ export class WebglRendererThreejsService {
     if (useSvgTextRenderer) {
       this.webglRenderer.renderAll();
     }
-  }
-
-  setSceneBackground(color: three.Color) {
-    this.scene.background = color;
   }
 
   createOrthographicCamera(
